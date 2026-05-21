@@ -34,7 +34,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .tabs { display:flex; gap:4px; padding:16px 28px 0; border-bottom:1px solid var(--border); background:var(--bg); }
 .tab { padding:10px 18px; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; font-weight:500; color:var(--sub); border:1px solid transparent; border-bottom:none; transition:all .2s; }
 .tab:hover { color:var(--text); background:var(--card2); }
-.tab.active { background:var(--card); color:#fff; border-color:#fe663d55; border-top:2px solid var(--accent); }
+.tab.active { background:var(--card); color:var(--accent); border-color:#fe663d55; border-top:2px solid var(--accent); font-weight:700; }
 
 /* ── CONTENT ── */
 .content { padding:24px 28px; }
@@ -45,7 +45,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--gap); margin-bottom:var(--gap); }
 .kpi { background:var(--card); border:1px solid var(--border); border-radius:var(--r); padding:18px 20px; }
 .kpi-label { font-size:11px; color:var(--sub); text-transform:uppercase; letter-spacing:.6px; margin-bottom:6px; }
-.kpi-value { font-size:26px; font-weight:700; color:#fff; line-height:1; }
+.kpi-value { font-size:26px; font-weight:700; color:var(--text); line-height:1; }
 .kpi-sub { font-size:12px; margin-top:4px; }
 .pos { color:var(--green); } .neg { color:var(--red); } .neu { color:var(--yellow); }
 
@@ -67,9 +67,9 @@ select option { background:var(--card); }
 .tbl-wrap { background:var(--card); border:1px solid var(--border); border-radius:var(--r); overflow-x:auto; margin-top:var(--gap); }
 table { width:100%; border-collapse:collapse; font-size:12.5px; }
 th { text-align:left; padding:10px 14px; background:var(--card2); color:var(--sub); font-weight:600; text-transform:uppercase; font-size:11px; letter-spacing:.5px; white-space:nowrap; border-bottom:1px solid var(--border); }
-td { padding:9px 14px; border-bottom:1px solid #1e2438; }
+td { padding:9px 14px; border-bottom:1px solid var(--border); }
 tr:last-child td { border-bottom:none; }
-tr:hover td { background:#ffffff08; }
+tr:hover td { background:rgba(0,0,0,0.04); }
 .tag { display:inline-block; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:600; }
 .tag-turbo { background:linear-gradient(-45deg,#fe663d22,#ff3d5522); color:#fe9070; border:1px solid #fe663d44; }
 .tag-reg { background:#00e5a022; color:var(--green); border:1px solid #00e5a044; }
@@ -88,7 +88,7 @@ tr:hover td { background:#ffffff08; }
 /* ── ALERT BOX ── */
 .alert { background:#ff3d5515; border:1px solid #ff3d5544; border-radius:8px; padding:12px 16px; margin-bottom:var(--gap); font-size:13px; color:#ff9aaa; }
 .info-box { background:linear-gradient(-45deg,#fe663d12,#ff3d5512); border:1px solid #fe663d44; border-radius:8px; padding:12px 16px; margin-bottom:var(--gap); font-size:13px; color:#fe9070; }
-.success-box { background:#00e5a015; border:1px solid #00e5a044; border-radius:8px; padding:12px 16px; margin-bottom:var(--gap); font-size:13px; color:#7dffd0; }
+.success-box { background:#00e5a015; border:1px solid #00e5a044; border-radius:8px; padding:12px 16px; margin-bottom:var(--gap); font-size:13px; color:#005534; }
 .rappi-badge { display:inline-block; background:linear-gradient(-45deg,#fe663d,#ff3d55); border-radius:6px; padding:3px 10px; font-size:11px; font-weight:700; color:#fff; letter-spacing:.3px; }
 
 /* ── OPERATIONAL ── */
@@ -960,12 +960,12 @@ function renderGarantia() {
   });
 
   // Chart: Ally % of GMV (meta ≥5%)
-  const allyPcts = MONTHLY.map(m => m.gmv ? +(m.ally/m.gmv*100).toFixed(2) : 0);
+  const allyPcts = MONTHLY.map(m => (m.is_mtd && m.ally===0) ? null : (m.gmv ? +(m.ally/m.gmv*100).toFixed(2) : 0));
   makeChart('chart-ally-pct', {
     type:'bar',
     data:{ labels: barLabels,
       datasets:[
-        {label:'Ally % GMV',data:allyPcts,backgroundColor:allyPcts.map(v=>v>=5?'#00e5a0aa':'#ff6b6baa'),borderColor:allyPcts.map(v=>v>=5?'#00e5a0':'#ff6b6b'),borderWidth:1,borderRadius:4},
+        {label:'Ally % GMV',data:allyPcts,backgroundColor:allyPcts.map(v=>v===null?'#cccccc88':v>=5?'#00e5a0aa':'#ff6b6baa'),borderColor:allyPcts.map(v=>v===null?'#cccccc':v>=5?'#00e5a0':'#ff6b6b'),borderWidth:1,borderRadius:4},
         {label:'Meta 5%',   data:MONTHLY.map(()=>5),borderColor:'#ffd166',borderWidth:2,borderDash:[6,4],type:'line',fill:false,pointRadius:0},
       ]},
     options:{ responsive:true, maintainAspectRatio:false, animation:false,
@@ -981,7 +981,7 @@ function renderGarantia() {
     const allyPct  = m.gmv ? m.ally/m.gmv*100 : 0;
     const allyOk   = allyPct >= 5;
     const isFull   = !m.is_partial && !m.is_mtd;
-    const tag      = m.is_mtd ? '📍 MTD al día 15' : m.is_partial ? '📆 Mes parcial (Dic 10-31)' : '';
+    const tag      = m.is_mtd ? '📍 MTD al día 17' : m.is_partial ? '📆 Mes parcial (Dic 10-31)' : '';
     const fcBlock  = m.is_mtd ? `
       <span>🔮 Forecast mes: <strong style="color:${m.forecast>=META_FULL?'#00e5a0':'#ffd166'}">${fmt(m.forecast)}</strong>
         <span style="font-size:10px;color:#8892b0">(${fmtP(m.forecast/META_FULL*100)} de $9.28M)</span>
@@ -3168,7 +3168,7 @@ function renderFrecuentes() {
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
           '<span style="font-size:11px;font-weight:700;color:'+c.badge+';text-transform:uppercase;letter-spacing:.5px">'+c.label+'</span>' +
           '<span style="font-size:11px;color:var(--sub)">'+icon+' '+frec+'</span></div>' +
-        '<div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:4px">'+fmtN(d.u)+'</div>' +
+        '<div style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:4px">'+fmtN(d.u)+'</div>' +
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:8px;font-size:11px">' +
           '<div style="color:var(--sub)">Órd/usr<br><strong style="color:var(--text)">'+d.avg_ord+'</strong></div>' +
           '<div style="color:var(--sub)">AOV<br><strong style="color:var(--text)">'+fmt(d.aov)+'</strong></div>' +
