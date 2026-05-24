@@ -108,13 +108,6 @@ tr:hover td { background:rgba(0,0,0,0.04); }
 </style>
 </head>
 <body>
-<div id="loading-overlay" style="position:fixed;inset:0;background:rgba(232,232,232,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:14px;padding:36px 56px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.15);border:1px solid #d8d8d8">
-    <div style="font-size:40px;margin-bottom:14px">📡</div>
-    <div style="font-size:16px;font-weight:700;color:#1a0f0a;margin-bottom:8px">Actualizando datos en tiempo real</div>
-    <div style="font-size:13px;color:#8a6a55" id="loading-msg">Conectando con Google Sheets...</div>
-  </div>
-</div>
 
 
 <div class="hdr">
@@ -144,7 +137,7 @@ tr:hover td { background:rgba(0,0,0,0.04); }
 <div id="tab-tendencia" class="tab-panel active">
 
   <div class="success-box">
-    ✅ <strong>Datos reales Snowflake</strong> — GMV + Órdenes + Usuarios: ORDER_DIMENSIONS · Sesiones + CVR: Silver DB · Abr 2024 → Mar 2026
+    ✅ <strong>Datos reales Snowflake</strong> — GMV + Órdenes + Usuarios: ORDER_DIMENSIONS · Sesiones + CVR disponibles hasta Mar 2026 (Silver DB) · Abr/May 2026 sin sesiones aún
   </div>
 
   <div class="kpis" id="kpis-tendencia"></div>
@@ -773,9 +766,10 @@ let MONTHLY = [
 const SHEET_ID   = '1505lhKRO2eKzYeST6w16fTqqvkzgZFBGx-88fMetI8A';
 const SHEET_BASE = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=`;
 const SHEET_TABS = {
-  weekly:  'Explore%20%7C%201779590750446',
-  monthly: 'Explore%20%7C%201779590799923',
-  stores:  'Explore%20%7C%201779591191030',
+  weekly:   'Explore%20%7C%201779590750446',
+  monthly:  'Explore%20%7C%201779590799923',
+  stores:   'Explore%20%7C%201779591191030',
+  sessions: 'Explore%20%7C%201779593908631',  // ✅ Query 6: Sesiones + CVR mensual
 };
 
 // Datos que NO vienen de Snowflake: inversión Ally/Rappi, pricing, flags de período
@@ -859,100 +853,199 @@ function parseCSVRow(line) {
 // ── Fetch una pestaña del Google Sheet como CSV ──
 async function fetchSheet(tabParam) {
   const url = SHEET_BASE + tabParam;
+  console.log('📥 Fetching:', url);
   const resp = await fetch(url, { cache: 'no-cache' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${tabParam}`);
   const text = await resp.text();
-  return parseCSV(text);
+  // Detectar si llegó HTML en vez de CSV (auth redirect / error de nombre)
+  if (text.trim().startsWith('<') || text.trim().startsWith('<!')) {
+    throw new Error(`Respuesta HTML (posiblemente auth o nombre incorrecto) — ${tabParam}`);
+  }
+  const rows = parseCSV(text);
+  if (rows.length > 0) {
+    console.log(`📊 Tab "${tabParam}" → ${rows.length} filas, columnas:`, Object.keys(rows[0]));
+  } else {
+    console.warn(`⚠️ Tab "${tabParam}" → CSV vacío o sin rows`);
+  }
+  return rows;
+}
+
+// ── Helpers de parsing ──
+function cleanNum(v) {
+  // Quita comas de miles, espacios, y parsea. E.g. "1,234,567" → 1234567
+  if (v === null || v === undefined || v === '') return 0;
+  return parseFloat(String(v).replace(/,/g,'').trim()) || 0;
+}
+function cleanInt(v) { return Math.round(cleanNum(v)); }
+function colVal(row, ...names) {
+  // Busca la columna por múltiples variantes de nombre (case-insensitive)
+  for (const n of names) {
+    const upper = n.toUpperCase();
+    if (row[upper] !== undefined && row[upper] !== '') return row[upper];
+    if (row[n]     !== undefined && row[n]     !== '') return row[n];
+  }
+  return '';
 }
 
 // ── Carga todos los sheets y actualiza las variables globales ──
 async function loadFromSheets() {
-  const overlay = document.getElementById('loading-overlay');
-  const msg     = document.getElementById('loading-msg');
   const badge   = document.getElementById('update-badge');
+
+  // Guardar backups para poder restaurar si el fetch devuelve vacío
+  const _WEEKLY_BK   = WEEKLY.slice();
+  const _MONTHLY_BK  = MONTHLY.slice();
+  const _STORES_BK   = STORES_DATA.slice();
+  const _WEEKS_BK    = weeks.slice();
+
+  let sheetOk = false;
 
   try {
     // — WEEKLY —
-    msg.textContent = 'Cargando datos semanales...';
     const wRows = await fetchSheet(SHEET_TABS.weekly);
     if (wRows.length > 0) {
-      WEEKLY = wRows.map(r => ({
-        w:   (r['WEEK_START'] || '').substring(0,10),
-        b:   parseInt(r['BRAND_ID']) || 0,
-        o:   parseInt(r['ORDERS'])   || 0,
-        g:   parseFloat(r['GMV'])    || 0,
-        aov: parseFloat(r['AOV'])    || 0,
+      const parsed = wRows.map(r => ({
+        w:   (colVal(r,'WEEK_START','week_start','Week Start') || '').substring(0,10),
+        b:   cleanInt(colVal(r,'BRAND_ID','brand_id','Brand Id')),
+        o:   cleanInt(colVal(r,'ORDERS','orders','Ordenes','ORDENES')),
+        g:   cleanNum(colVal(r,'GMV','gmv','Gmv')),
+        aov: cleanNum(colVal(r,'AOV','aov','Aov')),
       })).filter(r => r.w && r.b && r.g > 0);
-      weeks = [...new Set(WEEKLY.map(d => d.w))].sort();
+      if (parsed.length > 0) {
+        WEEKLY = parsed;
+        weeks  = [...new Set(WEEKLY.map(d => d.w))].sort();
+        console.log('✅ WEEKLY cargado:', WEEKLY.length, 'filas,', weeks.length, 'semanas');
+      } else {
+        console.warn('⚠️ WEEKLY parseado vacío — usando hardcoded. Headers:', Object.keys(wRows[0] || {}));
+      }
     }
 
     // — MONTHLY —
-    msg.textContent = 'Cargando datos mensuales...';
     const mRows = await fetchSheet(SHEET_TABS.monthly);
     if (mRows.length > 0) {
-      MONTHLY = mRows.map(r => {
-        const ms     = r['MONTH_START'] || '';
-        const mo     = ms.substring(0, 7);          // "YYYY-MM"
-        const sup    = MONTHLY_SUPPLEMENT[mo] || {};
-        const gmv    = parseFloat(r['GMV'])    || 0;
-        const orders = parseInt(r['ORDERS'])   || 0;
-        const users  = parseInt(r['USERS'])    || 0;
+      const parsed = mRows.map(r => {
+        const ms  = colVal(r,'MONTH_START','month_start','Month Start') || '';
+        const mo  = ms.substring(0, 7);
+        const sup = MONTHLY_SUPPLEMENT[mo] || {};
+        const gmv    = cleanNum(colVal(r,'GMV','gmv'));
+        const orders = cleanInt(colVal(r,'ORDERS','orders'));
+        const users  = cleanInt(colVal(r,'USERS','users','Usuarios','USUARIOS'));
+        if (!mo || gmv === 0) return null;
         const total_days = sup.total_days
           || new Date(parseInt(mo.split('-')[0]), parseInt(mo.split('-')[1]), 0).getDate();
-        const days   = sup.is_mtd ? new Date().getDate() : (sup.days || total_days);
-        const label  = sup.is_mtd
-          ? `${sup.label || mo} MTD (día ${days})`
-          : (sup.label || mo);
-        const goal   = sup.is_mtd
+        const days  = sup.is_mtd ? new Date().getDate() : (sup.days || total_days);
+        const goal  = sup.is_mtd
           ? Math.round((sup.goal || META_FULL_VAL) / total_days * days)
           : (sup.goal || META_FULL_VAL);
+        const label = sup.is_mtd
+          ? `${sup.label || mo} MTD (día ${days})`
+          : (sup.label || mo);
         return { month:mo, label, gmv, orders, users,
           goal, ally:sup.ally||0, rappi:sup.rappi||0, pricing:sup.pricing||0,
           is_partial:!!sup.is_partial, days, total_days, is_mtd:!!sup.is_mtd,
-          forecast: sup.forecast || null };
-      }).filter(r => r.month && r.gmv > 0).sort((a,b) => a.month.localeCompare(b.month));
+          forecast:sup.forecast||null };
+      }).filter(Boolean).sort((a,b) => a.month.localeCompare(b.month));
+      if (parsed.length > 0) {
+        MONTHLY = parsed;
+        console.log('✅ MONTHLY cargado:', MONTHLY.length, 'meses');
+      } else {
+        console.warn('⚠️ MONTHLY parseado vacío — usando hardcoded. Headers:', Object.keys(mRows[0] || {}));
+      }
     }
 
     // — STORES —
-    msg.textContent = 'Cargando datos de tiendas...';
     const sRows = await fetchSheet(SHEET_TABS.stores);
     if (sRows.length > 0) {
-      STORES_DATA = sRows.map(r => {
-        const sid    = parseInt(r['STORE_ID'])     || 0;
-        const orders = parseInt(r['ORDENES'])      || 0;
-        const gmv    = parseFloat(r['GMV_TOTAL'])  || 0;
-        const users  = parseInt(r['U_FRECUENTES']) || 0;
-        const aov    = orders > 0 ? +(gmv / orders).toFixed(2) : 0;
-        const sup    = STORES_SUPPLEMENT[sid] || { defect_orders:0, defect_rate:0, prep_sec:0, delivery_sec:0, total_sec:0 };
-        return { sid, sname:r['TIENDA']||'',
-          bid:parseInt(r['BRAND_ID'])||0, marca:r['MARCA']||'',
-          ciudad:r['CIUDAD']||'', zona:r['ZONA']||'',
-          microzona:r['MICROZONA']||'', territorio:r['TERRITORIO']||'',
+      const parsed = sRows.map(r => {
+        const sid    = cleanInt(colVal(r,'STORE_ID','store_id'));
+        const orders = cleanInt(colVal(r,'ORDENES','orders','ORDERS'));
+        const gmv    = cleanNum(colVal(r,'GMV_TOTAL','gmv_total','GMV','gmv'));
+        const users  = cleanInt(colVal(r,'U_FRECUENTES','u_frecuentes','USERS','users'));
+        if (!sid || gmv === 0) return null;
+        const aov = orders > 0 ? +(gmv / orders).toFixed(2) : 0;
+        const sup = STORES_SUPPLEMENT[sid] || { defect_orders:0, defect_rate:0, prep_sec:0, delivery_sec:0, total_sec:0 };
+        return { sid,
+          sname: colVal(r,'TIENDA','tienda','STORE_NAME','store_name') || '',
+          bid:   cleanInt(colVal(r,'BRAND_ID','brand_id')),
+          marca: colVal(r,'MARCA','marca','BRAND_NAME','brand_name') || '',
+          ciudad: colVal(r,'CIUDAD','ciudad') || '',
+          zona:       colVal(r,'ZONA','zona','STORE_OP_ZONE_NAME') || '',
+          microzona:  colVal(r,'MICROZONA','microzona','STORE_MICROZONE_NAME') || '',
+          territorio: colVal(r,'TERRITORIO','territorio','TERRITORIO_MX') || '',
           orders, gmv, users, aov, ...sup };
-      }).filter(r => r.sid && r.gmv > 0).sort((a,b) => b.gmv - a.gmv);
+      }).filter(Boolean).sort((a,b) => b.gmv - a.gmv);
+      if (parsed.length > 0) {
+        STORES_DATA = parsed;
+        console.log('✅ STORES cargado:', STORES_DATA.length, 'tiendas');
+      } else {
+        console.warn('⚠️ STORES parseado vacío — usando hardcoded. Headers:', Object.keys(sRows[0] || {}));
+      }
     }
 
-    // — Badge actualizado —
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('es-MX', {day:'numeric', month:'short', year:'numeric'});
+    // — SESSIONS / CVR —
+    const sessRows = await fetchSheet(SHEET_TABS.sessions);
+    if (sessRows.length > 0) {
+      // Construir mapa { "2026-04": { sessions, cvr } }
+      const sessMap = {};
+      sessRows.forEach(r => {
+        const ms = colVal(r,'MONTH_START','month_start') || '';
+        const mo = ms.substring(0, 7); // "YYYY-MM"
+        if (!mo) return;
+        sessMap[mo] = {
+          sessions: cleanInt(colVal(r,'SESSIONS','sessions')),
+          cvr:      cleanNum(colVal(r,'CVR_PCT','cvr_pct','CVR','cvr')),
+        };
+      });
+      // Inyectar en PRE_GARANTIA (muta los objetos, no reasigna el array)
+      PRE_GARANTIA.forEach(d => {
+        const key = d.m; // "2026-04"
+        if (sessMap[key] && sessMap[key].sessions > 0) {
+          d.sessions = sessMap[key].sessions;
+          d.cvr      = +sessMap[key].cvr.toFixed(2);
+        }
+      });
+      const updated = Object.keys(sessMap).length;
+      console.log('✅ SESSIONS cargado:', updated, 'meses actualizados en PRE_GARANTIA');
+    }
+
+    sheetOk = true;
+
+  } catch (err) {
+    console.warn('Google Sheets fetch falló — usando datos hardcodeados:', err.message);
+    // Restaurar backups si el fetch parcialmente sobreescribió con vacío
+    if (WEEKLY.length === 0)     { WEEKLY = _WEEKLY_BK;   weeks = _WEEKS_BK; }
+    if (MONTHLY.length === 0)    MONTHLY = _MONTHLY_BK;
+    if (STORES_DATA.length === 0) STORES_DATA = _STORES_BK;
+  }
+
+  // Actualizar badge
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('es-MX', {day:'numeric', month:'short', year:'numeric'});
+  if (sheetOk) {
     badge.textContent  = `📡 Actualizado ${dateStr} · Datos reales Snowflake`;
     badge.style.background  = '#00875a18';
     badge.style.borderColor = '#00875a55';
     badge.style.color       = '#00875a';
-
-  } catch (err) {
-    console.warn('Google Sheets fetch falló — usando datos hardcodeados:', err);
-    badge.textContent = '⚠️ Datos locales (sin conexión al Sheet)';
+  } else {
+    badge.textContent = `📦 Datos locales ${dateStr} · Sin conexión al Sheet`;
     badge.style.color = '#d48000';
   }
 
-  // Ocultar overlay y lanzar el dashboard
-  overlay.style.display = 'none';
-  _initDashboard();
+  // Siempre actualizar badge y re-renderizar si hay datos frescos
+  if (sheetOk) {
+    try { renderTendencia(); } catch(e){}
+    setTimeout(()=>{
+      try { renderSemanal();   } catch(e){}
+      try { renderGarantia();  } catch(e){}
+      try { renderTurbo();     } catch(e){}
+      try { renderTiendas();   } catch(e){}
+      try { renderUsuarios();  } catch(e){}
+    }, 100);
+  }
 }
 
 function _initDashboard() {
-  renderTendencia();
+  // Render inmediato con los datos disponibles (hardcoded o Sheet)
+  try { renderTendencia(); } catch(e){ console.error('renderTendencia',e); }
   setTimeout(() => {
     try { renderSemanal();   } catch(e){ console.error('renderSemanal',e); }
     try { renderGarantia();  } catch(e){ console.error('renderGarantia',e); }
@@ -1353,7 +1446,7 @@ const TENDENCIA_24M = [
   {m:'2026-02',label:'Feb 26', orders:21577, gmv:6733512, users:15991, aov:312.07, sessions:259801, cvr:9.51,  garantia:true},
   {m:'2026-03',label:'Mar 26', orders:18942, gmv:5739220, users:13722, aov:302.99, sessions:248054, cvr:8.59,  garantia:true},
   {m:'2026-04',label:'Abr 26', orders:27378, gmv:8740946, users:20457, aov:319.27, sessions:null,   cvr:null,  garantia:true},
-  {m:'2026-05',label:'May 26*',orders:10223, gmv:3188865, users:7230,  aov:311.93, sessions:null,   cvr:null,  garantia:true, is_partial:true},
+  {m:'2026-05',label:'May 26', orders:18814, gmv:6254787, users:12341, aov:332.43, sessions:null,   cvr:null,  garantia:true, is_partial:true},
 ];
 
 // ═══════════════════════════════════════════════
@@ -1745,8 +1838,10 @@ function renderTendencia() {
   const avgGmvPre = pre.reduce((s,d)=>s+d.gmv,0)/pre.length;
   const avgGmvGar = gar.reduce((s,d)=>s+d.gmv,0)/gar.length;
   const uplift = avgGmvPre ? (avgGmvGar/avgGmvPre - 1)*100 : 0;
-  const avgCvrPre = pre.reduce((s,d)=>s+d.cvr,0)/pre.length;
-  const avgCvrGar = gar.reduce((s,d)=>s+d.cvr,0)/gar.length;
+  const preWCvr = pre.filter(d=>d.cvr!==null && d.cvr!==undefined);
+  const garWCvr = gar.filter(d=>d.cvr!==null && d.cvr!==undefined);
+  const avgCvrPre = preWCvr.length ? preWCvr.reduce((s,d)=>s+d.cvr,0)/preWCvr.length : 0;
+  const avgCvrGar = garWCvr.length ? garWCvr.reduce((s,d)=>s+d.cvr,0)/garWCvr.length : 0;
   const bestGmv   = T.reduce((a,b)=>b.gmv>a.gmv?b:a);
 
   $('kpis-tendencia').innerHTML = `
@@ -3470,11 +3565,11 @@ function switchTab(name) {
   setTimeout(()=>{ Object.values(CHARTS).forEach(c=>{ try{c.resize();}catch(e){} }); }, 60);
 }
 
-// ── Init: carga Google Sheets y luego renderiza ──
-// renderCohortes / renderRecompra son excluidos del pre-render:
-// Chart.js no puede medir canvas en tabs display:none.
-// Se renderizan on-demand vía switchTab().
-loadFromSheets();
+// ── Init: render inmediato con datos hardcodeados ──
+// Los sheets se cargan en background y re-renderizan si tienen datos frescos.
+// renderCohortes / renderRecompra excluidos del pre-render (Chart.js + display:none).
+_initDashboard();
+setTimeout(loadFromSheets, 500); // Sheet en background, sin bloquear UI
 </script>
 </body>
 </html>
