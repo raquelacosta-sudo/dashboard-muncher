@@ -108,13 +108,21 @@ tr:hover td { background:rgba(0,0,0,0.04); }
 </style>
 </head>
 <body>
+<div id="loading-overlay" style="position:fixed;inset:0;background:rgba(232,232,232,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px 56px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.15);border:1px solid #d8d8d8">
+    <div style="font-size:40px;margin-bottom:14px">📡</div>
+    <div style="font-size:16px;font-weight:700;color:#1a0f0a;margin-bottom:8px">Actualizando datos en tiempo real</div>
+    <div style="font-size:13px;color:#8a6a55" id="loading-msg">Conectando con Google Sheets...</div>
+  </div>
+</div>
+
 
 <div class="hdr">
   <div>
     <h1>📊 Dashboard 360 — Grupo de Marcas</h1>
     <div class="sub">Rappi MX · Garantía $8M MXN + IVA/mes · 39 meses · Inicio: 10 Dic 2025</div>
   </div>
-  <div class="badge">Datos reales Snowflake · Actualizado May 17, 2026</div>
+  <div class="badge" id="update-badge">⏳ Cargando datos...</div>
 </div>
 
 <div class="tabs">
@@ -717,7 +725,7 @@ const BRAND_MAP = {};
 BRANDS.forEach(b => BRAND_MAP[b.id] = b);
 
 // Weekly data — 22 semanas (Dic 8 2025 → May 4 2026) | Actualizado May 17 2026
-const WEEKLY = [
+let WEEKLY = [
   {w:"2025-12-08",b:361448,o:736,g:351657,aov:477.79},{w:"2025-12-08",b:365632,o:385,g:173100,aov:449.61},{w:"2025-12-08",b:484188,o:130,g:46045,aov:354.19},{w:"2025-12-08",b:504732,o:105,g:43810,aov:417.23},{w:"2025-12-08",b:542042,o:24,g:8464,aov:352.66},{w:"2025-12-08",b:542049,o:75,g:26007,aov:346.75},{w:"2025-12-08",b:543391,o:8,g:3686,aov:460.8},{w:"2025-12-08",b:575113,o:519,g:218711,aov:421.41},
   {w:"2025-12-15",b:361448,o:1300,g:546106,aov:420.08},{w:"2025-12-15",b:365632,o:732,g:259676,aov:354.75},{w:"2025-12-15",b:484188,o:547,g:141706,aov:259.06},{w:"2025-12-15",b:504732,o:558,g:138624,aov:248.43},{w:"2025-12-15",b:542042,o:70,g:17370,aov:248.14},{w:"2025-12-15",b:542049,o:148,g:46909,aov:316.95},{w:"2025-12-15",b:543391,o:113,g:24031,aov:212.67},{w:"2025-12-15",b:575113,o:570,g:231392,aov:405.95},
   {w:"2025-12-22",b:361448,o:1237,g:514082,aov:415.59},{w:"2025-12-22",b:365632,o:690,g:254170,aov:368.36},{w:"2025-12-22",b:484188,o:491,g:142355,aov:289.93},{w:"2025-12-22",b:504732,o:391,g:106212,aov:271.64},{w:"2025-12-22",b:542042,o:26,g:6520,aov:250.78},{w:"2025-12-22",b:542049,o:143,g:42715,aov:298.7},{w:"2025-12-22",b:543391,o:82,g:17623,aov:214.91},{w:"2025-12-22",b:575113,o:276,g:114661,aov:415.44},
@@ -748,7 +756,7 @@ const WEEKLY = [
 // Nov: programa inició ~Nov 14 → 17 días de datos
 // May 26: MTD al día 13 | Actualizado May 17 2026
 const META_FULL = 8000000 * 1.16; // 9,280,000
-const MONTHLY = [
+let MONTHLY = [
   // Dic 2025 — May 17 2026 | Actualizado May 17 2026
   {month:"2025-12", label:"Dic 2025",     gmv:4470513,  orders:12121, goal:META_FULL, ally:398266,  rappi:1839848, pricing:172500, is_partial:false, days:31, total_days:31, is_mtd:false, forecast:null},
   {month:"2026-01", label:"Ene 2026",     gmv:8115352,  orders:25759, goal:META_FULL, ally:457312,  rappi:1690400, pricing:172500, is_partial:false, days:31, total_days:31, is_mtd:false, forecast:null},
@@ -758,6 +766,203 @@ const MONTHLY = [
   {month:"2026-05", label:"May 2026 MTD", gmv:4389628, orders:13473, goal:Math.round(META_FULL/31*17), ally:0, rappi:0, pricing:0, is_partial:true, days:17, total_days:31, is_mtd:true, forecast:8004616},
 ];
 
+
+// ═══════════════════════════════════════════════
+//  GOOGLE SHEETS — carga de datos en tiempo real
+// ═══════════════════════════════════════════════
+const SHEET_ID   = '1505lhKRO2eKzYeST6w16fTqqvkzgZFBGx-88fMetI8A';
+const SHEET_BASE = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=`;
+const SHEET_TABS = {
+  weekly:  'Explore%20%7C%201779590750446',
+  monthly: 'Explore%20%7C%201779590799923',
+  stores:  'Explore%20%7C%201779591191030',
+};
+
+// Datos que NO vienen de Snowflake: inversión Ally/Rappi, pricing, flags de período
+const META_FULL_VAL = META_FULL;
+const MONTHLY_SUPPLEMENT = {
+  '2025-12': {label:'Dic 2025',     goal:META_FULL_VAL, ally:398266,  rappi:1839848, pricing:172500, is_partial:false, days:31, total_days:31, is_mtd:false, forecast:null},
+  '2026-01': {label:'Ene 2026',     goal:META_FULL_VAL, ally:457312,  rappi:1690400, pricing:172500, is_partial:false, days:31, total_days:31, is_mtd:false, forecast:null},
+  '2026-02': {label:'Feb 2026',     goal:META_FULL_VAL, ally:387654,  rappi:1723211, pricing:172500, is_partial:false, days:28, total_days:28, is_mtd:false, forecast:null},
+  '2026-03': {label:'Mar 2026',     goal:META_FULL_VAL, ally:312890,  rappi:1548762, pricing:172500, is_partial:false, days:31, total_days:31, is_mtd:false, forecast:null},
+  '2026-04': {label:'Abr 2026',     goal:META_FULL_VAL, ally:102669,  rappi:1510570, pricing:185624, is_partial:false, days:30, total_days:30, is_mtd:false, forecast:null},
+  '2026-05': {label:'May 2026',     goal:META_FULL_VAL, ally:0,       rappi:0,       pricing:0,      is_partial:true,  days:null, total_days:31, is_mtd:true,  forecast:null},
+  '2026-06': {label:'Jun 2026',     goal:META_FULL_VAL, ally:0,       rappi:0,       pricing:0,      is_partial:true,  days:null, total_days:30, is_mtd:true,  forecast:null},
+  '2026-07': {label:'Jul 2026',     goal:META_FULL_VAL, ally:0,       rappi:0,       pricing:0,      is_partial:true,  days:null, total_days:31, is_mtd:true,  forecast:null},
+};
+
+// Defectos y tiempos operativos por tienda (no están en el query de Aleph)
+const STORES_SUPPLEMENT = {
+  1923717866:{defect_orders:261,defect_rate:2.98,prep_sec:1107,delivery_sec:958, total_sec:2648},
+  1930092312:{defect_orders:193,defect_rate:2.81,prep_sec:1826,delivery_sec:943, total_sec:2967},
+  1923721248:{defect_orders:181,defect_rate:2.74,prep_sec:972, delivery_sec:1015,total_sec:2534},
+  1930212325:{defect_orders:89, defect_rate:1.56,prep_sec:603, delivery_sec:447, total_sec:1228},
+  1923721347:{defect_orders:177,defect_rate:3.29,prep_sec:1291,delivery_sec:1135,total_sec:2916},
+  1923683175:{defect_orders:137,defect_rate:3.19,prep_sec:1472,delivery_sec:1141,total_sec:3005},
+  1923725799:{defect_orders:120,defect_rate:2.69,prep_sec:1472,delivery_sec:1102,total_sec:2860},
+  1930092311:{defect_orders:147,defect_rate:3.26,prep_sec:1929,delivery_sec:1096,total_sec:3210},
+  1930167614:{defect_orders:202,defect_rate:5.14,prep_sec:2151,delivery_sec:1426,total_sec:3793},
+  1923725797:{defect_orders:123,defect_rate:3.21,prep_sec:1612,delivery_sec:1208,total_sec:3074},
+  1923689291:{defect_orders:129,defect_rate:4.20,prep_sec:1895,delivery_sec:1250,total_sec:3413},
+  1930019376:{defect_orders:156,defect_rate:4.61,prep_sec:1594,delivery_sec:1355,total_sec:3225},
+  1930269359:{defect_orders:43, defect_rate:2.29,prep_sec:733, delivery_sec:383, total_sec:1329},
+  1930051689:{defect_orders:111,defect_rate:3.56,prep_sec:1255,delivery_sec:1294,total_sec:3107},
+  1930222329:{defect_orders:32, defect_rate:1.83,prep_sec:662, delivery_sec:545, total_sec:1364},
+  1930020817:{defect_orders:169,defect_rate:5.88,prep_sec:1726,delivery_sec:1324,total_sec:3362},
+  1930051687:{defect_orders:88, defect_rate:3.38,prep_sec:1686,delivery_sec:1303,total_sec:3153},
+  1930159830:{defect_orders:134,defect_rate:5.16,prep_sec:1839,delivery_sec:1200,total_sec:3204},
+  1930110400:{defect_orders:43, defect_rate:2.41,prep_sec:701, delivery_sec:405, total_sec:1267},
+  1930020815:{defect_orders:142,defect_rate:5.86,prep_sec:1704,delivery_sec:1384,total_sec:3383},
+  1930159826:{defect_orders:73, defect_rate:3.44,prep_sec:1935,delivery_sec:1373,total_sec:3503},
+  1930051686:{defect_orders:66, defect_rate:3.21,prep_sec:1246,delivery_sec:1158,total_sec:3064},
+  1930261225:{defect_orders:19, defect_rate:1.67,prep_sec:959, delivery_sec:339, total_sec:1460},
+  1930051690:{defect_orders:67, defect_rate:3.71,prep_sec:1722,delivery_sec:1304,total_sec:3304},
+  1930110402:{defect_orders:29, defect_rate:3.34,prep_sec:748, delivery_sec:500, total_sec:1411},
+  1930112109:{defect_orders:32, defect_rate:4.40,prep_sec:732, delivery_sec:471, total_sec:1378},
+  1930261224:{defect_orders:8,  defect_rate:2.17,prep_sec:764, delivery_sec:372, total_sec:1277},
+  1930110389:{defect_orders:16, defect_rate:3.50,prep_sec:799, delivery_sec:369, total_sec:1310},
+  1930112108:{defect_orders:11, defect_rate:3.58,prep_sec:857, delivery_sec:350, total_sec:1354},
+  1930110399:{defect_orders:8,  defect_rate:3.56,prep_sec:851, delivery_sec:379, total_sec:1401},
+  1930110388:{defect_orders:12, defect_rate:5.36,prep_sec:930, delivery_sec:347, total_sec:1440},
+  1930112107:{defect_orders:16, defect_rate:5.46,prep_sec:923, delivery_sec:516, total_sec:1555},
+  1930212992:{defect_orders:10, defect_rate:4.41,prep_sec:750, delivery_sec:394, total_sec:1297},
+  1930020816:{defect_orders:4,  defect_rate:3.13,prep_sec:1634,delivery_sec:1186,total_sec:2974},
+  1930260982:{defect_orders:4,  defect_rate:2.63,prep_sec:930, delivery_sec:353, total_sec:1405},
+  1930286383:{defect_orders:5,  defect_rate:4.63,prep_sec:961, delivery_sec:319, total_sec:1397},
+  1930212987:{defect_orders:5,  defect_rate:8.33,prep_sec:846, delivery_sec:422, total_sec:1427},
+};
+
+// ── CSV parser robusto (maneja comillas y comas en valores) ──
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = parseCSVRow(lines[0]).map(h => h.trim().replace(/^"|"$/g,'').toUpperCase());
+  return lines.slice(1).map(line => {
+    const vals = parseCSVRow(line);
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (vals[i] || '').replace(/^"|"$/g,'').trim(); });
+    return obj;
+  }).filter(r => Object.values(r).some(v => v !== ''));
+}
+function parseCSVRow(line) {
+  const result = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (inQ && line[i+1]==='"') { cur+='"'; i++; } else { inQ = !inQ; } }
+    else if (ch === ',' && !inQ) { result.push(cur); cur = ''; }
+    else { cur += ch; }
+  }
+  result.push(cur);
+  return result;
+}
+
+// ── Fetch una pestaña del Google Sheet como CSV ──
+async function fetchSheet(tabParam) {
+  const url = SHEET_BASE + tabParam;
+  const resp = await fetch(url, { cache: 'no-cache' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} — ${tabParam}`);
+  const text = await resp.text();
+  return parseCSV(text);
+}
+
+// ── Carga todos los sheets y actualiza las variables globales ──
+async function loadFromSheets() {
+  const overlay = document.getElementById('loading-overlay');
+  const msg     = document.getElementById('loading-msg');
+  const badge   = document.getElementById('update-badge');
+
+  try {
+    // — WEEKLY —
+    msg.textContent = 'Cargando datos semanales...';
+    const wRows = await fetchSheet(SHEET_TABS.weekly);
+    if (wRows.length > 0) {
+      WEEKLY = wRows.map(r => ({
+        w:   (r['WEEK_START'] || '').substring(0,10),
+        b:   parseInt(r['BRAND_ID']) || 0,
+        o:   parseInt(r['ORDERS'])   || 0,
+        g:   parseFloat(r['GMV'])    || 0,
+        aov: parseFloat(r['AOV'])    || 0,
+      })).filter(r => r.w && r.b && r.g > 0);
+      weeks = [...new Set(WEEKLY.map(d => d.w))].sort();
+    }
+
+    // — MONTHLY —
+    msg.textContent = 'Cargando datos mensuales...';
+    const mRows = await fetchSheet(SHEET_TABS.monthly);
+    if (mRows.length > 0) {
+      MONTHLY = mRows.map(r => {
+        const ms     = r['MONTH_START'] || '';
+        const mo     = ms.substring(0, 7);          // "YYYY-MM"
+        const sup    = MONTHLY_SUPPLEMENT[mo] || {};
+        const gmv    = parseFloat(r['GMV'])    || 0;
+        const orders = parseInt(r['ORDERS'])   || 0;
+        const users  = parseInt(r['USERS'])    || 0;
+        const total_days = sup.total_days
+          || new Date(parseInt(mo.split('-')[0]), parseInt(mo.split('-')[1]), 0).getDate();
+        const days   = sup.is_mtd ? new Date().getDate() : (sup.days || total_days);
+        const label  = sup.is_mtd
+          ? `${sup.label || mo} MTD (día ${days})`
+          : (sup.label || mo);
+        const goal   = sup.is_mtd
+          ? Math.round((sup.goal || META_FULL_VAL) / total_days * days)
+          : (sup.goal || META_FULL_VAL);
+        return { month:mo, label, gmv, orders, users,
+          goal, ally:sup.ally||0, rappi:sup.rappi||0, pricing:sup.pricing||0,
+          is_partial:!!sup.is_partial, days, total_days, is_mtd:!!sup.is_mtd,
+          forecast: sup.forecast || null };
+      }).filter(r => r.month && r.gmv > 0).sort((a,b) => a.month.localeCompare(b.month));
+    }
+
+    // — STORES —
+    msg.textContent = 'Cargando datos de tiendas...';
+    const sRows = await fetchSheet(SHEET_TABS.stores);
+    if (sRows.length > 0) {
+      STORES_DATA = sRows.map(r => {
+        const sid    = parseInt(r['STORE_ID'])     || 0;
+        const orders = parseInt(r['ORDENES'])      || 0;
+        const gmv    = parseFloat(r['GMV_TOTAL'])  || 0;
+        const users  = parseInt(r['U_FRECUENTES']) || 0;
+        const aov    = orders > 0 ? +(gmv / orders).toFixed(2) : 0;
+        const sup    = STORES_SUPPLEMENT[sid] || { defect_orders:0, defect_rate:0, prep_sec:0, delivery_sec:0, total_sec:0 };
+        return { sid, sname:r['TIENDA']||'',
+          bid:parseInt(r['BRAND_ID'])||0, marca:r['MARCA']||'',
+          ciudad:r['CIUDAD']||'', zona:r['ZONA']||'',
+          microzona:r['MICROZONA']||'', territorio:r['TERRITORIO']||'',
+          orders, gmv, users, aov, ...sup };
+      }).filter(r => r.sid && r.gmv > 0).sort((a,b) => b.gmv - a.gmv);
+    }
+
+    // — Badge actualizado —
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('es-MX', {day:'numeric', month:'short', year:'numeric'});
+    badge.textContent  = `📡 Actualizado ${dateStr} · Datos reales Snowflake`;
+    badge.style.background  = '#00875a18';
+    badge.style.borderColor = '#00875a55';
+    badge.style.color       = '#00875a';
+
+  } catch (err) {
+    console.warn('Google Sheets fetch falló — usando datos hardcodeados:', err);
+    badge.textContent = '⚠️ Datos locales (sin conexión al Sheet)';
+    badge.style.color = '#d48000';
+  }
+
+  // Ocultar overlay y lanzar el dashboard
+  overlay.style.display = 'none';
+  _initDashboard();
+}
+
+function _initDashboard() {
+  renderTendencia();
+  setTimeout(() => {
+    try { renderSemanal();   } catch(e){ console.error('renderSemanal',e); }
+    try { renderGarantia();  } catch(e){ console.error('renderGarantia',e); }
+    try { renderTurbo();     } catch(e){ console.error('renderTurbo',e); }
+    try { renderOperativa(); } catch(e){ console.error('renderOperativa',e); }
+    try { renderUsuarios();  } catch(e){ console.error('renderUsuarios',e); }
+    try { renderTiendas();   } catch(e){ console.error('renderTiendas',e); }
+  }, 200);
+}
+
 // ═══════════════════════════════════════════════
 //  HELPERS
 // ═══════════════════════════════════════════════
@@ -766,7 +971,7 @@ const fmt  = n => n >= 1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n >= 1e3 ? '$'+(n/1e3)
 const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : n.toLocaleString();
 const fmtP = n => n.toFixed(1)+'%';
 const pct  = (a,b) => b ? ((a/b)-1)*100 : 0;
-const weeks = [...new Set(WEEKLY.map(d=>d.w))].sort();
+let weeks = [...new Set(WEEKLY.map(d=>d.w))].sort();
 const CHARTS = {};
 
 Chart.defaults.color = '#8a6a55';
@@ -1242,7 +1447,7 @@ const COHORT_MATRIX = [
 
 // ── Stores data (Snowflake · Dic 10, 2025 → Abr 19, 2026) ──
 // prep_sec / delivery_sec / total_sec = raw seconds from ORDER_DIMENSIONS
-const STORES_DATA = [
+let STORES_DATA = [
   {sid:1923717866, sname:"Franco Polanco",            bid:361448, orders:8750,  gmv:3426029, users:4707, aov:391.55, defect_orders:261, defect_rate:2.98, prep_sec:1107, delivery_sec:958,  total_sec:2648},
   {sid:1930092312, sname:"Franco Escandón",           bid:361448, orders:6860,  gmv:2694175, users:4144, aov:392.74, defect_orders:193, defect_rate:2.81, prep_sec:1826, delivery_sec:943,  total_sec:2967},
   {sid:1923721248, sname:"Franco Juárez",             bid:361448, orders:6598,  gmv:2392687, users:4407, aov:362.64, defect_orders:181, defect_rate:2.74, prep_sec:972,  delivery_sec:1015, total_sec:2534},
@@ -3265,21 +3470,11 @@ function switchTab(name) {
   setTimeout(()=>{ Object.values(CHARTS).forEach(c=>{ try{c.resize();}catch(e){} }); }, 60);
 }
 
-// ── Init ──
-renderTendencia();
-
-// Pre-render background tabs after a moment (visible-tab charts only)
-// renderCohortes / renderRecompra are intentionally excluded:
-// Chart.js cannot measure canvas dimensions inside display:none tabs,
-// producing 0-size charts that never recover. They render on-demand via switchTab().
-setTimeout(()=>{
-  try { renderSemanal();   } catch(e){ console.error('renderSemanal',e); }
-  try { renderGarantia();  } catch(e){ console.error('renderGarantia',e); }
-  try { renderTurbo();     } catch(e){ console.error('renderTurbo',e); }
-  try { renderOperativa(); } catch(e){ console.error('renderOperativa',e); }
-  try { renderUsuarios();  } catch(e){ console.error('renderUsuarios',e); }
-  try { renderTiendas();   } catch(e){ console.error('renderTiendas',e); }
-}, 200);
+// ── Init: carga Google Sheets y luego renderiza ──
+// renderCohortes / renderRecompra son excluidos del pre-render:
+// Chart.js no puede medir canvas en tabs display:none.
+// Se renderizan on-demand vía switchTab().
+loadFromSheets();
 </script>
 </body>
 </html>
