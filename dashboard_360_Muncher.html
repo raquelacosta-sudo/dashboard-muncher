@@ -886,6 +886,33 @@ function colVal(row, ...names) {
   }
   return '';
 }
+// Parsea fechas en múltiples formatos → "YYYY-MM"
+// Maneja: ISO "2026-04-01", MX "01/04/2026", US "4/1/2026"
+function parseMonthKey(s) {
+  if (!s) return '';
+  s = String(s).trim();
+  // ISO: 2026-04-01 o 2026-04
+  if (/^\d{4}-\d{2}/.test(s)) return s.substring(0, 7);
+  // Con separador /
+  const parts = s.split('/');
+  if (parts.length === 3) {
+    const nums = parts.map(x => parseInt(x, 10));
+    // YYYY/MM/DD
+    if (nums[0] > 1000) return `${nums[0]}-${String(nums[1]).padStart(2,'0')}`;
+    // DD/MM/YYYY (locale MX) o MM/DD/YYYY (locale US)
+    // Como las fechas son siempre el día 1, ambos valores A y B son ≤ 12.
+    // Para MX: A=día, B=mes → month = B
+    // Para US: A=mes, B=día → month = A
+    // Heurística: si A <= 12 y B <= 12 asumimos MX (DD/MM/YYYY) → mes = B
+    const year = nums[2];
+    const a = nums[0], b = nums[1];
+    if (year > 1000) {
+      const month = (a > 12) ? b : (b > 12) ? a : b; // MX default: mes=b
+      return `${year}-${String(month).padStart(2,'0')}`;
+    }
+  }
+  return s.substring(0, 7);
+}
 
 // ── Carga todos los sheets y actualiza las variables globales ──
 async function loadFromSheets() {
@@ -924,8 +951,9 @@ async function loadFromSheets() {
     if (mRows.length > 0) {
       const parsed = mRows.map(r => {
         const ms  = colVal(r,'MONTH_START','month_start','Month Start') || '';
-        const mo  = ms.substring(0, 7);
+        const mo  = parseMonthKey(ms);
         const sup = MONTHLY_SUPPLEMENT[mo] || {};
+        console.log(`  MONTHLY row: ms="${ms}" → mo="${mo}", sup keys:`, Object.keys(sup));
         const gmv    = cleanNum(colVal(r,'GMV','gmv'));
         const orders = cleanInt(colVal(r,'ORDERS','orders'));
         const users  = cleanInt(colVal(r,'USERS','users','Usuarios','USUARIOS'));
@@ -946,7 +974,18 @@ async function loadFromSheets() {
       }).filter(Boolean).sort((a,b) => a.month.localeCompare(b.month));
       if (parsed.length > 0) {
         MONTHLY = parsed;
-        console.log('✅ MONTHLY cargado:', MONTHLY.length, 'meses');
+        // Fallback: si algún mes tiene ally=0 pero el hardcoded backup tiene datos, usarlo
+        MONTHLY.forEach(m => {
+          if (m.ally === 0 && m.rappi === 0) {
+            const bk = _MONTHLY_BK.find(x => x.month === m.month);
+            if (bk && (bk.ally > 0 || bk.rappi > 0)) {
+              m.ally    = bk.ally;
+              m.rappi   = bk.rappi;
+              m.pricing = bk.pricing;
+            }
+          }
+        });
+        console.log('✅ MONTHLY cargado:', MONTHLY.length, 'meses. ally[0]=', MONTHLY[0]?.ally);
       } else {
         console.warn('⚠️ MONTHLY parseado vacío — usando hardcoded. Headers:', Object.keys(mRows[0] || {}));
       }
@@ -988,15 +1027,16 @@ async function loadFromSheets() {
       const sessMap = {};
       sessRows.forEach(r => {
         const ms = colVal(r,'MONTH_START','month_start') || '';
-        const mo = ms.substring(0, 7); // "YYYY-MM"
+        const mo = parseMonthKey(ms); // "YYYY-MM"
         if (!mo) return;
         sessMap[mo] = {
           sessions: cleanInt(colVal(r,'SESSIONS','sessions')),
           cvr:      cleanNum(colVal(r,'CVR_PCT','cvr_pct','CVR','cvr')),
         };
       });
-      // Inyectar en PRE_GARANTIA (muta los objetos, no reasigna el array)
-      PRE_GARANTIA.forEach(d => {
+      console.log('📊 sessMap keys:', Object.keys(sessMap));
+      // Inyectar en TENDENCIA_24M (muta los objetos, no reasigna el array)
+      TENDENCIA_24M.forEach(d => {
         const key = d.m; // "2026-04"
         if (sessMap[key] && sessMap[key].sessions > 0) {
           d.sessions = sessMap[key].sessions;
@@ -1004,7 +1044,7 @@ async function loadFromSheets() {
         }
       });
       const updated = Object.keys(sessMap).length;
-      console.log('✅ SESSIONS cargado:', updated, 'meses actualizados en PRE_GARANTIA');
+      console.log('✅ SESSIONS cargado:', updated, 'meses disponibles → inyectados en TENDENCIA_24M');
     }
 
     sheetOk = true;
